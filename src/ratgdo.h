@@ -1,62 +1,90 @@
-#ifndef _RATGDO_H
-#define _RATGDO_H
+/****************************************************************************
+ * RATGDO HomeKit for ESP32
+ * https://ratcloud.llc
+ * https://github.com/PaulWieland/ratgdo
+ * 
+ * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * All Rights Reserved.
+ * Licensed under terms of the GPL-3.0 License.
+ * 
+ * Contributions acknowledged from
+ * Brandon Matthews... https://github.com/thenewwazoo
+ * Jonathan Stroud...  https://github.com/jgstroud
+ * 
+ */
+#pragma once
 
+// C/C++ language includes
+// none
+
+
+// Arduino includes
 #include <Arduino.h>
-#include "homekit_decl.h"
+
+// ESP system includes
+#include <driver/gpio.h>
+
+// RATGDO project includes
+#include "HomeSpan.h"
+#include "log.h"
 
 #define DEVICE_NAME "homekit-ratgdo"
 #define MANUF_NAME "ratCloud llc"
 #define SERIAL_NUMBER "0P3ND00R"
-#define MODEL_NAME "ratgdo_v2.5"
-#define CHIP_FAMILY "ESP8266"
+#define MODEL_NAME "ratgdo_32"
+#define CHIP_FAMILY "ESP32"
 
 /********************************** PIN DEFINITIONS *****************************************/
 
-#define UART_TX_PIN D1 // red control terminal / GarageDoorOpener (UART1 TX)
-#define UART_RX_PIN D2 // red control terminal / GarageDoorOpener (UART1 RX)
+const gpio_num_t UART_TX_PIN = GPIO_NUM_17;
+const gpio_num_t UART_RX_PIN = GPIO_NUM_21;
+const gpio_num_t LED_BUILTIN = GPIO_NUM_2;
 
-#define INPUT_OBST_PIN D7 // black obstruction sensor terminal
+// TODO obstruction refactor
+// const gpio_num_t INPUT_OBST_PIN = GPIO_NUM_13; // black obstruction sensor terminal
 
 /*
- * TODO add support for dry contact switches
+// TODO add support for dry contact switches
 #define STATUS_DOOR_PIN         D0  // output door status, HIGH for open, LOW for closed
-*/
 #define STATUS_OBST_PIN D8 // output for obstruction status, HIGH for obstructed, LOW for clear
-/*
 #define DRY_CONTACT_OPEN_PIN    D5  // dry contact for opening door
 #define DRY_CONTACT_CLOSE_PIN   D6  // dry contact for closing door
 #define DRY_CONTACT_LIGHT_PIN   D3  // dry contact for triggering light (no discrete light commands, so toggle only)
- */
+*/
+
+extern uint32_t free_heap;
+extern uint32_t min_heap;
+extern bool web_setup_done;
 
 /********************************** MODEL *****************************************/
 
 enum GarageDoorCurrentState : uint8_t
 {
-    CURR_OPEN = HOMEKIT_CHARACTERISTIC_CURRENT_DOOR_STATE_OPEN,
-    CURR_CLOSED = HOMEKIT_CHARACTERISTIC_CURRENT_DOOR_STATE_CLOSED,
-    CURR_OPENING = HOMEKIT_CHARACTERISTIC_CURRENT_DOOR_STATE_OPENING,
-    CURR_CLOSING = HOMEKIT_CHARACTERISTIC_CURRENT_DOOR_STATE_CLOSING,
-    CURR_STOPPED = HOMEKIT_CHARACTERISTIC_CURRENT_DOOR_STATE_STOPPED,
+    CURR_OPEN = Characteristic::CurrentDoorState::OPEN,
+    CURR_CLOSED = Characteristic::CurrentDoorState::CLOSED,
+    CURR_OPENING = Characteristic::CurrentDoorState::OPENING,
+    CURR_CLOSING = Characteristic::CurrentDoorState::CLOSING,
+    CURR_STOPPED = Characteristic::CurrentDoorState::STOPPED,
 };
 
 enum GarageDoorTargetState : uint8_t
 {
-    TGT_OPEN = HOMEKIT_CHARACTERISTIC_TARGET_DOOR_STATE_OPEN,
-    TGT_CLOSED = HOMEKIT_CHARACTERISTIC_TARGET_DOOR_STATE_CLOSED,
+    TGT_OPEN = Characteristic::TargetDoorState::OPEN,
+    TGT_CLOSED = Characteristic::TargetDoorState::CLOSED,
 };
 
 enum LockCurrentState : uint8_t
 {
-    CURR_UNLOCKED = HOMEKIT_CHARACTERISTIC_CURRENT_LOCK_STATE_UNSECURED,
-    CURR_LOCKED = HOMEKIT_CHARACTERISTIC_CURRENT_LOCK_STATE_SECURED,
-    CURR_JAMMED = HOMEKIT_CHARACTERISTIC_CURRENT_LOCK_STATE_JAMMED,
-    CURR_UNKNOWN = HOMEKIT_CHARACTERISTIC_CURRENT_LOCK_STATE_UNKNOWN,
+    CURR_UNLOCKED = Characteristic::LockCurrentState::UNLOCKED,
+    CURR_LOCKED = Characteristic::LockCurrentState::LOCKED,
+    CURR_JAMMED = Characteristic::LockCurrentState::JAMMED,
+    CURR_UNKNOWN = Characteristic::LockCurrentState::UNKNOWN,
 };
 
 enum LockTargetState : uint8_t
 {
-    TGT_UNLOCKED = HOMEKIT_CHARACTERISTIC_TARGET_LOCK_STATE_UNSECURED,
-    TGT_LOCKED = HOMEKIT_CHARACTERISTIC_TARGET_LOCK_STATE_SECURED,
+    TGT_UNLOCKED = Characteristic::LockTargetState::UNLOCK,
+    TGT_LOCKED = Characteristic::LockTargetState::LOCK,
 };
 
 struct GarageDoor
@@ -73,41 +101,10 @@ struct GarageDoor
     LockTargetState target_lock;
 };
 
+extern GarageDoor garage_door;
+
 struct ForceRecover
 {
    uint8_t push_count;
    unsigned long timeout;
 };
-
-class LED
-{
-private:
-    uint8_t activeState = LOW;   // LOW == LED on, HIGH == LED off
-    uint8_t idleState = HIGH;    // opposite of active
-    unsigned long resetTime = 0; // Stores time when LED should return to idle state
-    bool initialized = false;
-
-public:
-    LED();
-
-    void on();
-    void off();
-    void idle();
-    void flash(unsigned long ms = 0);
-    void setIdleState(uint8_t state);
-    uint8_t getIdleState() { return idleState; };
-};
-
-extern LED led;
-
-#define LOOP_SYSTEM 0
-#define LOOP_IMPROV 1
-#define LOOP_COMMS  2
-#define LOOP_HK     3
-#define LOOP_TIMER  4
-#define LOOP_WEB    5
-extern uint8_t loop_id;
-
-#define FLASH_MS 50
-
-#endif // _RATGDO_H

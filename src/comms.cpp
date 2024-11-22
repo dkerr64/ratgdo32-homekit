@@ -1,21 +1,40 @@
+/****************************************************************************
+ * RATGDO HomeKit for ESP32
+ * https://ratcloud.llc
+ * https://github.com/PaulWieland/ratgdo
+ *
+ * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * All Rights Reserved.
+ * Licensed under terms of the GPL-3.0 License.
+ *
+ * Contributions acknowledged from
+ * Brandon Matthews... https://github.com/thenewwazoo
+ * Jonathan Stroud...  https://github.com/jgstroud
+ *
+ */
 
+// C/C++ language includes
+// none
+
+// Arduino includes
+#include <Ticker.h>
+
+// RATGDO project includes
 #include "SoftwareSerial.h"
 #include "ratgdo.h"
-#include "homekit_debug.h"
-// #include "secplus.h"
 #include "homekit.h"
-#include "log.h"
-
 #include "Reader.h"
 #include "secplus2.h"
 #include "Packet.h"
-#include "cQueue.h"
 #include "utilities.h"
 #include "comms.h"
-#include "web.h"
+#include "config.h"
+#include "led.h"
+// #include "web.h"
 
-#include <Ticker.h>
+static const char *TAG = "ratgdo-comms";
 
+/********************************** LOCAL STORAGE *****************************************/
 /********************************** LOCAL STORAGE *****************************************/
 
 struct PacketAction
@@ -25,7 +44,7 @@ struct PacketAction
     uint32_t delay;
 };
 
-Queue_t pkt_q;
+QueueHandle_t pkt_q;
 SoftwareSerial sw_serial;
 
 extern struct GarageDoor garage_door;
@@ -39,6 +58,8 @@ void (*TTC_Action)(void) = NULL;
 
 struct ForceRecover force_recover;
 #define force_recover_delay 3
+
+uint32_t secType = 2;
 
 /******************************* SECURITY 2.0 *********************************/
 
@@ -101,18 +122,15 @@ void manual_recovery();
 
 void setup_comms()
 {
-    IRAM_START
-    // IRAM heap is used only for allocating globals, to leave as much regular heap
-    // available during operations.  We need to carefully monitor useage so as not
-    // to exceed available IRAM.  We can adjust the LOG_BUFFER_SIZE (in log.h) if we
-    // need to make more space available for initialization.
-    // init queue
-    q_init(&pkt_q, sizeof(PacketAction), 8, FIFO, false);
+    // Create packet queue
+    pkt_q = xQueueCreate(5, sizeof(PacketAction));
 
-    if (userConfig->gdoSecurityType == 1)
+    secType = userConfig->getGDOSecurityType();
+
+    if (secType == 1)
     {
 
-        RINFO("=== Setting up comms for Secuirty+1.0 protocol");
+        RINFO(TAG, "=== Setting up comms for Secuirty+1.0 protocol");
 
         sw_serial.begin(1200, SWSERIAL_8E1, UART_RX_PIN, UART_TX_PIN, true);
 
@@ -124,31 +142,31 @@ void setup_comms()
     }
     else
     {
-        RINFO("=== Setting up comms for Secuirty+2.0 protocol");
+        RINFO(TAG, "=== Setting up comms for Secuirty+2.0 protocol");
 
         sw_serial.begin(9600, SWSERIAL_8N1, UART_RX_PIN, UART_TX_PIN, true);
         sw_serial.enableIntTx(false);
         sw_serial.enableAutoBaud(true); // found in ratgdo/espsoftwareserial branch autobaud
 
         // read from flash, default of 0 if file not exist
-        id_code = read_int_from_file("id_code");
+        id_code = nvRam->read("id_code");
         if (!id_code)
         {
-            RINFO("id code not found");
+            RINFO(TAG, "id code not found");
             id_code = (random(0x1, 0xFFF) << 12) | 0x539;
-            write_int_to_file("id_code", id_code);
+            nvRam->write("id_code", id_code);
         }
-        RINFO("id code %02X", id_code);
+        RINFO(TAG, "id code %lu (0x%02lX)", id_code, id_code);
 
         // read from flash, default of 0 if file not exist
-        rolling_code = read_int_from_file("rolling");
+        rolling_code = nvRam->read("rolling", 0);
         // last saved rolling code may be behind what the GDO thinks, so bump it up so that it will
         // always be ahead of what the GDO thinks it should be, and save it.
         rolling_code = (rolling_code != 0) ? rolling_code + MAX_CODES_WITHOUT_FLASH_WRITE : 0;
         save_rolling_code();
-        RINFO("rolling code %02X", rolling_code);
+        RINFO(TAG, "rolling code %lu (0x%02X)", rolling_code, rolling_code);
 
-        RINFO("Syncing rolling code counter after reboot...");
+        RINFO(TAG, "Syncing rolling code counter after reboot...");
         sync();
 
         // Get the initial state of the door
@@ -158,21 +176,20 @@ void setup_comms()
         }
         force_recover.push_count = 0;
     }
-    IRAM_END("GDO comms started");
 }
 
 void save_rolling_code()
 {
-    write_int_to_file("rolling", rolling_code);
+    nvRam->write("rolling", rolling_code);
     last_saved_code = rolling_code;
 }
 
 void reset_door()
 {
     rolling_code = 0; // because sync_and_reboot writes this.
-    delete_file("rolling");
-    delete_file("id_code");
-    delete_file("has_motion");
+    nvRam->erase("rolling");
+    nvRam->erase("id_code");
+    nvRam->erase("has_motion");
 }
 
 void wallPlate_Emulation()
@@ -202,7 +219,7 @@ void wallPlate_Emulation()
     {
         if (currentMillis - lastRequestMillis > 1000)
         {
-            RINFO("Looking for security+ 1.0 DIGITAL wall panel...");
+            RINFO(TAG, "Looking for security+ 1.0 DIGITAL wall panel...");
             lastRequestMillis = currentMillis;
         }
 
@@ -210,7 +227,7 @@ void wallPlate_Emulation()
         {
             wallPanelDetected = true;
             wallplateBooting = false;
-            RINFO("DIGITAL Wall panel detected.");
+            RINFO(TAG, "DIGITAL Wall panel detected.");
             return;
         }
     }
@@ -219,7 +236,7 @@ void wallPlate_Emulation()
         if (!emulateWallPanel && !wallPanelDetected)
         {
             emulateWallPanel = true;
-            RINFO("No DIGITAL wall panel detected. Switching to emulation mode.");
+            RINFO(TAG, "No DIGITAL wall panel detected. Switching to emulation mode.");
         }
 
         // transmit every 250ms
@@ -235,7 +252,10 @@ void wallPlate_Emulation()
             data.value.cmd = secplus1ToSend;
             Packet pkt = Packet(PacketCommand::GetStatus, data, id_code);
             PacketAction pkt_ac = {pkt, true, 20}; // 20ms delay for SECURITY1.0 (which is minimum delay)
-            q_push(&pkt_q, &pkt_ac);
+            if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+            {
+                RERROR(TAG, "packet queue full");
+            }
 
             // send direct
             // transmitSec1(secplus1ToSend);
@@ -297,7 +317,7 @@ void comms_loop_sec1()
 
             if (gotMessage == false && (millis() - last_rx) > 100)
             {
-                RINFO("RX message timeout");
+                RINFO(TAG, "RX message timeout");
                 // if we have a partial packet and it's been over 100ms since last byte was read,
                 // the rest is not coming (a full packet should be received in ~20ms),
                 // discard it so we can read the following packet correctly
@@ -319,7 +339,7 @@ void comms_loop_sec1()
 
         if (key == secplus1Codes::DoorButtonPress)
         {
-            RINFO("0x30 RX (door press)");
+            RINFO(TAG, "0x30 RX (door press)");
             manual_recovery();
             if (motionTriggers.bit.doorKey)
             {
@@ -332,7 +352,7 @@ void comms_loop_sec1()
         // but also on release of door button
         else if (key == secplus1Codes::DoorButtonRelease)
         {
-            RINFO("0x31 RX (door release)");
+            RINFO(TAG, "0x31 RX (door release)");
 
             // Possible power up of 889LM
             if ((DoorState)doorState == DoorState::Unknown)
@@ -342,12 +362,12 @@ void comms_loop_sec1()
         }
         else if (key == secplus1Codes::LightButtonPress)
         {
-            RINFO("0x32 RX (light press)");
+            RINFO(TAG, "0x32 RX (light press)");
             manual_recovery();
         }
         else if (key == secplus1Codes::LightButtonRelease)
         {
-            RINFO("0x33 RX (light release)");
+            RINFO(TAG, "0x33 RX (light release)");
         }
 
         // 2 byte status messages (0x38 - 0x3A)
@@ -355,21 +375,21 @@ void comms_loop_sec1()
         if (key == secplus1Codes::DoorStatus || key == secplus1Codes::ObstructionStatus || key == secplus1Codes::LightLockStatus)
         {
 
-            // RINFO("SEC1 STATUS MSG: %X%02X",key,val);
+            // RINFO(TAG, "SEC1 STATUS MSG: %X%02X",key,val);
 
             switch (key)
             {
             // door status
             case secplus1Codes::DoorStatus:
 
-                // RINFO("0x38 MSG: %02X",val);
+                // RINFO(TAG, "0x38 MSG: %02X",val);
 
                 // 0x5X = stopped
                 // 0x0X = moving
                 // best attempt to trap invalid values (due to collisions)
                 if (((val & 0xF0) != 0x00) && ((val & 0xF0) != 0x50) && ((val & 0xF0) != 0xB0))
                 {
-                    RINFO("0x38 val upper nible not 0x0 or 0x5 or 0xB: %02X", val);
+                    RINFO(TAG, "0x38 val upper nible not 0x0 or 0x5 or 0xB: %02X", val);
                     break;
                 }
 
@@ -417,7 +437,7 @@ void comms_loop_sec1()
                     break;
                 }
 
-                // RINFO("doorstate: %d", doorState);
+                // RINFO(TAG, "doorstate: %d", doorState);
 
                 switch (doorState)
                 {
@@ -442,23 +462,23 @@ void comms_loop_sec1()
                     garage_door.target_state = TGT_CLOSED;
                     break;
                 case DoorState::Unknown:
-                    RERROR("Got door state unknown");
+                    RERROR(TAG, "Got door state unknown");
                     break;
                 }
 
                 if ((garage_door.current_state == CURR_CLOSING) && (TTCcountdown > 0))
                 {
                     // We are in a time-to-close delay timeout, cancel the timeout
-                    RINFO("Canceling time-to-close delay timer");
+                    RINFO(TAG, "Canceling time-to-close delay timer");
                     TTCtimer.detach();
                     TTCcountdown = 0;
                 }
 
                 if (!garage_door.active)
                 {
-                    RINFO("activating door");
+                    RINFO(TAG, "activating door");
                     garage_door.active = true;
-                    notify_homekit_active();
+                    // TODO notify_homekit_active();
                     if (garage_door.current_state == CURR_OPENING || garage_door.current_state == CURR_OPEN)
                     {
                         garage_door.target_state = TGT_OPEN;
@@ -493,7 +513,7 @@ void comms_loop_sec1()
                         l = "Closing";
                         break;
                     }
-                    RINFO("status DOOR: %s", l);
+                    RINFO(TAG, "status DOOR: %s", l);
 
                     notify_homekit_current_door_state_change();
                 }
@@ -515,12 +535,12 @@ void comms_loop_sec1()
             // light & lock
             case secplus1Codes::LightLockStatus:
 
-                // RINFO("0x3A MSG: %X%02X",key,val);
+                // RINFO(TAG, "0x3A MSG: %X%02X",key,val);
 
                 // upper nibble must be 5
                 if ((val & 0xF0) != 0x50)
                 {
-                    RINFO("0x3A val upper nible not 5: %02X", val);
+                    RINFO(TAG, "0x3A val upper nible not 5: %02X", val);
                     break;
                 }
 
@@ -532,7 +552,7 @@ void comms_loop_sec1()
                 // light state change?
                 if (lightState != lastLightState)
                 {
-                    RINFO("status LIGHT: %s", lightState ? "On" : "Off");
+                    RINFO(TAG, "status LIGHT: %s", lightState ? "On" : "Off");
                     lastLightState = lightState;
 
                     garage_door.light = (bool)lightState;
@@ -550,7 +570,7 @@ void comms_loop_sec1()
                 // lock state change?
                 if (lockState != lastLockState)
                 {
-                    RINFO("status LOCK: %s", lockState ? "Secured" : "Unsecured");
+                    RINFO(TAG, "status LOCK: %s", lockState ? "Secured" : "Unsecured");
                     lastLockState = lockState;
 
                     if (lockState)
@@ -586,9 +606,8 @@ void comms_loop_sec1()
     unsigned long now;
     bool okToSend = false;
 
-    if (!q_isEmpty(&pkt_q))
+    if (uxQueueMessagesWaiting(pkt_q) > 0)
     {
-
         now = millis();
 
         // if there is no wall panel, no need to check 200ms since last rx
@@ -612,18 +631,21 @@ void comms_loop_sec1()
         // OK to send based on above rules
         if (okToSend)
         {
-            if (q_peek(&pkt_q, &pkt_ac))
+
+            if (uxQueueMessagesWaiting(pkt_q) > 0)
             {
+                ESP_LOGD(TAG, "packet ready for tx");
+                xQueueReceive(pkt_q, &pkt_ac, 0); // ignore errors
                 if (process_PacketAction(pkt_ac))
                 {
                     // get next delay "between" transmits
                     cmdDelay = pkt_ac.delay;
-                    q_drop(&pkt_q);
                 }
                 else
                 {
                     cmdDelay = 0;
-                    RERROR("transmit failed, will retry");
+                    RERROR(TAG, "transmit failed, will retry");
+                    xQueueSendToFront(pkt_q, &pkt_ac, 0); // ignore errors
                 }
             }
         }
@@ -640,15 +662,14 @@ void comms_loop_sec2()
     {
         PacketAction pkt_ac;
 
-        if (q_peek(&pkt_q, &pkt_ac))
+        if (uxQueueMessagesWaiting(pkt_q) > 0)
         {
-            if (process_PacketAction(pkt_ac))
+            ESP_LOGD(TAG, "packet ready for tx");
+            xQueueReceive(pkt_q, &pkt_ac, 0); // ignore errors
+            if (!process_PacketAction(pkt_ac))
             {
-                q_drop(&pkt_q);
-            }
-            else
-            {
-                RERROR("transmit failed, will retry");
+                RERROR(TAG, "transmit failed, will retry");
+                xQueueSendToFront(pkt_q, &pkt_ac, 0); // ignore errors
             }
         }
     }
@@ -690,23 +711,23 @@ void comms_loop_sec2()
                     target_state = TGT_CLOSED;
                     break;
                 case DoorState::Unknown:
-                    RERROR("Got door state unknown");
+                    RERROR(TAG, "Got door state unknown");
                     break;
                 }
 
                 if ((current_state == CURR_CLOSING) && (TTCcountdown > 0))
                 {
                     // We are in a time-to-close delay timeout, cancel the timeout
-                    RINFO("Canceling time-to-close delay timer");
+                    RINFO(TAG, "Canceling time-to-close delay timer");
                     TTCtimer.detach();
                     TTCcountdown = 0;
                 }
 
                 if (!garage_door.active)
                 {
-                    RINFO("activating door");
+                    RINFO(TAG, "activating door");
                     garage_door.active = true;
-                    notify_homekit_active();
+                    // TODO notify_homekit_active();
                     if (current_state == CURR_OPENING || current_state == CURR_OPEN)
                     {
                         target_state = TGT_OPEN;
@@ -717,7 +738,7 @@ void comms_loop_sec2()
                     }
                 }
 
-                RINFO("tgt %d curr %d", target_state, current_state);
+                RINFO(TAG, "tgt %d curr %d", target_state, current_state);
 
                 if ((target_state != garage_door.target_state) ||
                     (current_state != garage_door.current_state))
@@ -731,7 +752,7 @@ void comms_loop_sec2()
 
                 if (pkt.m_data.value.status.light != garage_door.light)
                 {
-                    RINFO("Light Status %s", pkt.m_data.value.status.light ? "On" : "Off");
+                    RINFO(TAG, "Light Status %s", pkt.m_data.value.status.light ? "On" : "Off");
                     garage_door.light = pkt.m_data.value.status.light;
                     notify_homekit_light();
                 }
@@ -784,7 +805,7 @@ void comms_loop_sec2()
                 }
                 if (lock != garage_door.target_lock)
                 {
-                    RINFO("Lock Cmd %d", lock);
+                    RINFO(TAG, "Lock Cmd %d", lock);
                     garage_door.target_lock = lock;
                     notify_homekit_target_lock();
                     if (motionTriggers.bit.lockKey)
@@ -818,7 +839,7 @@ void comms_loop_sec2()
                 }
                 if (l != garage_door.light)
                 {
-                    RINFO("Light Cmd %s", l ? "On" : "Off");
+                    RINFO(TAG, "Light Cmd %s", l ? "On" : "Off");
                     garage_door.light = l;
                     notify_homekit_light();
                     if (motionTriggers.bit.lightKey)
@@ -837,18 +858,18 @@ void comms_loop_sec2()
 
             case PacketCommand::Motion:
             {
-                RINFO("Motion Detected");
+                RINFO(TAG, "Motion Detected");
                 // We got a motion message, so we know we have a motion sensor
                 // If it's not yet enabled, add the service
                 if (!garage_door.has_motion_sensor)
                 {
-                    RINFO("Detected new Motion Sensor. Enabling Service");
+                    RINFO(TAG, "Detected new Motion Sensor. Enabling Service");
                     garage_door.has_motion_sensor = true;
                     motionTriggers.bit.motion = 1;
-                    userConfig->motionTriggers = motionTriggers.asInt;
-                    write_config_to_file();
+                    userConfig->set(cfg_motionTriggers, motionTriggers.asInt);
+                    userConfig->save();
                     // Only reboot if we had not already other motionTriggers (which would have enabled service already)
-                    enable_service_homekit_motion(motionTriggers.asInt == 1);
+                    // TODO enable_service_homekit_motion(motionTriggers.asInt == 1);
                 }
 
                 /* When we get the motion detect message, notify HomeKit. Motion sensor
@@ -867,7 +888,7 @@ void comms_loop_sec2()
 
             case PacketCommand::DoorAction:
             {
-                RINFO("Door Action");
+                RINFO(TAG, "Door Action");
                 if (pkt.m_data.value.door_action.pressed)
                 {
                     manual_recovery();
@@ -882,7 +903,7 @@ void comms_loop_sec2()
             }
 
             default:
-                RINFO("Support for %s packet unimplemented. Ignoring.", PacketCommand::to_string(pkt.m_pkt_cmd));
+                RINFO(TAG, "Support for %s packet unimplemented. Ignoring.", PacketCommand::to_string(pkt.m_pkt_cmd));
                 break;
             }
         }
@@ -897,8 +918,7 @@ void comms_loop_sec2()
 
 void comms_loop()
 {
-    loop_id = LOOP_COMMS;
-    if (userConfig->gdoSecurityType == 1)
+    if (secType == 1)
         comms_loop_sec1();
     else
         comms_loop_sec2();
@@ -927,7 +947,7 @@ bool transmitSec1(byte toSend)
     sw_serial.write(toSend);
     last_tx = millis();
 
-    // RINFO("SEC1 SEND BYTE: %02X",toSend);
+    // RINFO(TAG, "SEC1 SEND BYTE: %02X",toSend);
 
     // re-enable rx
     if (!poll_cmd)
@@ -951,7 +971,7 @@ bool transmitSec2(PacketAction &pkt_ac)
     // check to see if anyone else is continuing to assert the bus after we have released it
     if (digitalRead(UART_RX_PIN))
     {
-        RINFO("Collision detected, waiting to send packet");
+        RINFO(TAG, "Collision detected, waiting to send packet");
         return false;
     }
     else
@@ -959,7 +979,7 @@ bool transmitSec2(PacketAction &pkt_ac)
         uint8_t buf[SECPLUS2_CODE_LEN];
         if (pkt_ac.pkt.encode(rolling_code, buf) != 0)
         {
-            RERROR("Could not encode packet");
+            RERROR(TAG, "Could not encode packet");
             pkt_ac.pkt.print();
         }
         else
@@ -983,9 +1003,9 @@ bool process_PacketAction(PacketAction &pkt_ac)
     bool success = false;
 
     // Use LED to signal activity
-    led.flash(FLASH_MS);
+    led->flash(FLASH_MS);
 
-    if (userConfig->gdoSecurityType == 1)
+    if (secType == 1)
     {
         // check which action
         switch (pkt_ac.pkt.m_data.type)
@@ -1000,7 +1020,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
                 if (success)
                 {
                     last_tx = millis();
-                    // RINFO("sending 0x%02X query", pkt_ac.pkt.m_data.value.cmd);
+                    // RINFO(TAG, "sending 0x%02X query", pkt_ac.pkt.m_data.value.cmd);
                 }
             }
             break;
@@ -1013,7 +1033,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
                 if (success)
                 {
                     last_tx = millis();
-                    RINFO("sending DOOR button press");
+                    RINFO(TAG, "sending DOOR button press");
                 }
             }
             else
@@ -1022,7 +1042,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
                 if (success)
                 {
                     last_tx = millis();
-                    RINFO("sending DOOR button release");
+                    RINFO(TAG, "sending DOOR button release");
                 }
             }
 
@@ -1037,7 +1057,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
                 if (success)
                 {
                     last_tx = millis();
-                    RINFO("sending LIGHT button press");
+                    RINFO(TAG, "sending LIGHT button press");
                 }
             }
             else
@@ -1046,7 +1066,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
                 if (success)
                 {
                     last_tx = millis();
-                    RINFO("Sending LIGHT button release");
+                    RINFO(TAG, "Sending LIGHT button release");
                 }
             }
 
@@ -1061,7 +1081,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
                 if (success)
                 {
                     last_tx = millis();
-                    RINFO("sending LOCK button press");
+                    RINFO(TAG, "sending LOCK button press");
                 }
             }
             else
@@ -1070,7 +1090,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
                 if (success)
                 {
                     last_tx = millis();
-                    RINFO("sending LOCK button release");
+                    RINFO(TAG, "sending LOCK button release");
                 }
             }
 
@@ -1079,7 +1099,7 @@ bool process_PacketAction(PacketAction &pkt_ac)
 
         default:
         {
-            RINFO("pkt_ac.pkt.m_data.type=%d", pkt_ac.pkt.m_data.type);
+            RINFO(TAG, "pkt_ac.pkt.m_data.type=%d", pkt_ac.pkt.m_data.type);
 
             break;
         }
@@ -1124,23 +1144,32 @@ void door_command(DoorAction action)
     Packet pkt = Packet(PacketCommand::DoorAction, data, id_code);
     PacketAction pkt_ac = {pkt, false, 250}; // 250ms delay for SECURITY1.0
 
-    q_push(&pkt_q, &pkt_ac);
+    if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+    {
+        RERROR(TAG, "packet queue full, dropping door command pressed pkt");
+    }
 
     // do button release
     pkt_ac.pkt.m_data.value.door_action.pressed = false;
     pkt_ac.inc_counter = true;
     pkt_ac.delay = 40; // 40ms delay for SECURITY1.0
 
-    q_push(&pkt_q, &pkt_ac);
-
-    // when observing wall panel 2 releases happen, so we do the same
-    if (userConfig->gdoSecurityType == 1)
+    if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
     {
-        q_push(&pkt_q, &pkt_ac);
+        RERROR(TAG, "packet queue full, dropping door command release pkt");
+    }
+    // when observing wall panel 2 releases happen, so we do the same
+    if (secType == 1)
+    {
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping door command release pkt");
+        }
     }
 
     send_get_status();
 }
+
 void door_command_close()
 {
     door_command(DoorAction::Close);
@@ -1148,13 +1177,13 @@ void door_command_close()
 
 void open_door()
 {
-    RINFO("open door request");
+    RINFO(TAG, "open door request");
 
     if (TTCcountdown > 0)
     {
         // We are in a time-to-close delay timeout.
         // Effect of open is to cancel the timeout (leaving door open)
-        RINFO("Canceling time-to-close delay timer");
+        RINFO(TAG, "Canceling time-to-close delay timer");
         TTCtimer.detach();
         TTCcountdown = 0;
         // Reset light to state it was at before delay start.
@@ -1164,13 +1193,13 @@ void open_door()
     // safety
     if (garage_door.current_state == GarageDoorCurrentState::CURR_OPEN)
     {
-        RINFO("door already open; ignored request");
+        RINFO(TAG, "door already open; ignored request");
         return;
     }
 
     if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSING)
     {
-        RINFO("door is closing; do stop");
+        RINFO(TAG, "door is closing; do stop");
         door_command(DoorAction::Stop);
         return;
     }
@@ -1197,23 +1226,23 @@ void TTCdelayLoop()
 
 void close_door()
 {
-    RINFO("close door request");
+    RINFO(TAG, "close door request");
 
     // safety
     if (garage_door.current_state == GarageDoorCurrentState::CURR_CLOSED)
     {
-        RINFO("door already closed; ignored request");
+        RINFO(TAG, "door already closed; ignored request");
         return;
     }
 
     if (garage_door.current_state == GarageDoorCurrentState::CURR_OPENING)
     {
-        RINFO("door already opening; do stop");
+        RINFO(TAG, "door already opening; do stop");
         door_command(DoorAction::Stop);
         return;
     }
 
-    if (userConfig->TTCdelay == 0)
+    if (userConfig->getTTCseconds() == 0)
     {
         door_command(DoorAction::Close);
     }
@@ -1223,20 +1252,20 @@ void close_door()
         {
             // We are in a time-to-close delay timeout.
             // Effect of second click is to cancel the timeout and close immediately
-            RINFO("Canceling time-to-close delay timer");
+            RINFO(TAG, "Canceling time-to-close delay timer");
             TTCtimer.detach();
             TTCcountdown = 0;
             door_command(DoorAction::Close);
         }
         else
         {
-            RINFO("Delay door close by %d seconds", userConfig->TTCdelay);
+            RINFO(TAG, "Delay door close by %d seconds", userConfig->getTTCseconds());
             // Call delay loop every 0.5 seconds to flash light.
-            TTCcountdown = userConfig->TTCdelay * 2;
+            TTCcountdown = userConfig->getTTCseconds() * 2;
             // Remember whether light was on or off
             TTCwasLightOn = garage_door.light;
             TTC_Action = &door_command_close;
-            TTCtimer.attach_scheduled(0.5, TTCdelayLoop);
+            TTCtimer.attach_ms(500, TTCdelayLoop);
         }
     }
 }
@@ -1244,14 +1273,17 @@ void close_door()
 void send_get_status()
 {
     // only used with SECURITY2.0
-    if (userConfig->gdoSecurityType == 2)
+    if (secType == 2)
     {
         PacketData d;
         d.type = PacketDataType::NoData;
         d.value.no_data = NoData();
         Packet pkt = Packet(PacketCommand::GetStatus, d, id_code);
         PacketAction pkt_ac = {pkt, true};
-        q_push(&pkt_q, &pkt_ac);
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping get status pkt");
+        }
     }
 }
 
@@ -1270,21 +1302,20 @@ void set_lock(uint8_t value)
         garage_door.target_lock = TGT_UNLOCKED;
     }
 
-    // safety
-    if (data.value.lock.lock == LockState::On && garage_door.current_lock == LockCurrentState::CURR_LOCKED)
-    {
-        RINFO("Lock already Locked");
-        return;
-    }
-    if (data.value.lock.lock == LockState::Off && garage_door.current_lock == LockCurrentState::CURR_UNLOCKED)
-    {
-        RINFO("Lock already Unlocked");
-        return;
-    }
-
     // SECUIRTY1.0
-    if (userConfig->gdoSecurityType == 1)
+    if (secType == 1)
     {
+        // safety, Sec+1.0 is a toggle...
+        if (data.value.lock.lock == LockState::On && garage_door.current_lock == LockCurrentState::CURR_LOCKED)
+        {
+            RINFO(TAG, "Lock already Locked");
+            return;
+        }
+        if (data.value.lock.lock == LockState::Off && garage_door.current_lock == LockCurrentState::CURR_UNLOCKED)
+        {
+            RINFO(TAG, "Lock already Unlocked");
+            return;
+        }
 
         // this emulates the "look" button press+release
         // - PRESS (0x34)
@@ -1298,14 +1329,22 @@ void set_lock(uint8_t value)
         Packet pkt = Packet(PacketCommand::Lock, data, id_code);
         PacketAction pkt_ac = {pkt, true, 3000}; // 3000ms delay for SECURITY1.0
 
-        q_push(&pkt_q, &pkt_ac);
-
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping lock pkt");
+        }
         // button release
         pkt_ac.pkt.m_data.value.lock.pressed = false;
         pkt_ac.delay = 40; // 40ms delay for SECURITY1.0
-        // observed the wall plate does 2 releases, so we will too
-        q_push(&pkt_q, &pkt_ac);
-        q_push(&pkt_q, &pkt_ac);
+                           // observed the wall plate does 2 releases, so we will too
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping lock pkt");
+        }
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping lock pkt");
+        }
     }
     // SECURITY2.0
     else
@@ -1313,7 +1352,10 @@ void set_lock(uint8_t value)
         Packet pkt = Packet(PacketCommand::Lock, data, id_code);
         PacketAction pkt_ac = {pkt, true};
 
-        q_push(&pkt_q, &pkt_ac);
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping lock pkt");
+        }
         send_get_status();
     }
 }
@@ -1331,21 +1373,21 @@ void set_light(bool value)
         data.value.light.light = LightState::Off;
     }
 
-    // safety
-    if (data.value.light.light == LightState::On && garage_door.light == true)
-    {
-        RINFO("Light already On");
-        return;
-    }
-    if (data.value.light.light == LightState::Off && garage_door.light == false)
-    {
-        RINFO("Light already Off");
-        return;
-    }
-
     // SECUIRTY+1.0
-    if (userConfig->gdoSecurityType == 1)
+    if (secType == 1)
     {
+        // safety, Sec+1.0 is a toggle...
+        if (data.value.light.light == LightState::On && garage_door.light == true)
+        {
+            RINFO(TAG, "Light already On");
+            return;
+        }
+        if (data.value.light.light == LightState::Off && garage_door.light == false)
+        {
+            RINFO(TAG, "Light already Off");
+            return;
+        }
+
         // this emulates the "light" button press+release
         // - PRESS (0x32)
         // - DELAY 250ms
@@ -1358,14 +1400,22 @@ void set_light(bool value)
         Packet pkt = Packet(PacketCommand::Light, data, id_code);
         PacketAction pkt_ac = {pkt, true, 250}; // 250ms delay for SECURITY1.0
 
-        q_push(&pkt_q, &pkt_ac);
-
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping light pkt");
+        }
         // button release
         pkt_ac.pkt.m_data.value.light.pressed = false;
         pkt_ac.delay = 40; // 40ms delay for SECURITY1.0
-        // observed the wall plate does 2 releases, so we will too
-        q_push(&pkt_q, &pkt_ac);
-        q_push(&pkt_q, &pkt_ac);
+                           // observed the wall plate does 2 releases, so we will too
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping light pkt");
+        }
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping light pkt");
+        }
     }
     // SECURITY+2.0
     else
@@ -1373,7 +1423,10 @@ void set_light(bool value)
         Packet pkt = Packet(PacketCommand::Light, data, id_code);
         PacketAction pkt_ac = {pkt, true};
 
-        q_push(&pkt_q, &pkt_ac);
+        if (xQueueSendToBack(pkt_q, &pkt_ac, 0) == errQUEUE_FULL)
+        {
+            RERROR(TAG, "packet queue full, dropping light pkt");
+        }
         send_get_status();
     }
 }
@@ -1384,26 +1437,26 @@ void manual_recovery()
     // go to WiFi recovery mode
     if (force_recover.push_count++ == 0)
     {
-        RINFO("Push count start");
+        RINFO(TAG, "Push count start");
         force_recover.timeout = millis() + 3000;
     }
     else if (millis() > force_recover.timeout)
     {
-        RINFO("Push count reset");
+        RINFO(TAG, "Push count reset");
         force_recover.push_count = 0;
     }
-    RINFO("Push count %d", force_recover.push_count);
+    RINFO(TAG, "Push count %d", force_recover.push_count);
 
     if (force_recover.push_count >= 5)
     {
-        RINFO("Request to boot into soft access point mode in %ds", force_recover_delay);
-        userConfig->softAPmode = true;
-        write_config_to_file();
+        RINFO(TAG, "Request to boot into soft access point mode in %ds", force_recover_delay);
+        userConfig->set(cfg_softAPmode, true);
+        userConfig->save();
         // Call delay loop every 0.5 seconds to flash light.
         TTCcountdown = force_recover_delay * 2;
         // Remember whether light was on or off
         TTCwasLightOn = garage_door.light;
         TTC_Action = &sync_and_restart;
-        TTCtimer.attach_scheduled(0.5, TTCdelayLoop);
+        TTCtimer.attach_ms(500, TTCdelayLoop);
     }
 }

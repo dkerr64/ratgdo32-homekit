@@ -203,7 +203,9 @@ function setElementsFromStatus(status) {
                 document.getElementById("pwreq").checked = value;
                 break;
             case "LEDidle":
-                document.getElementById("LEDidle").checked = (value == 1);
+                document.getElementById("LEDidle0").checked = (value == 0) ? true : false;
+                document.getElementById("LEDidle1").checked = (value == 1) ? true : false;
+                document.getElementById("LEDidle2").checked = (value == 2) ? true : false;
                 break;
             case "rebootSeconds":
                 document.getElementById("rebootHours").value = value / 60 / 60;
@@ -254,6 +256,10 @@ function setElementsFromStatus(status) {
             case "syslogIP":
                 document.getElementById(key).innerHTML = value;
                 document.getElementById("syslogIP").placeholder = value;
+                break;
+            case "syslogPort":
+                document.getElementById(key).innerHTML = value;
+                document.getElementById("syslogPort").placeholder = value;
                 break;
             case "syslogEn":
                 document.getElementById(key).checked = value;
@@ -757,7 +763,8 @@ async function changePassword() {
     // await setGDO("credentials", passwordHash);
     await setGDO("credentials", JSON.stringify({
         username: www_username,
-        credentials: passwordHash
+        credentials: passwordHash,
+        password: newPW.value
     }));
     clearTimeout(checkHeartbeat);
     // On success, go to home page.
@@ -793,7 +800,8 @@ async function saveSettings() {
     const gdoSec = (document.getElementById("gdosec1").checked) ? '1' : '2';
     const pwReq = (document.getElementById("pwreq").checked) ? '1' : '0';
     const motionTriggers = getMotionTriggers();
-    const LEDidle = (document.getElementById("LEDidle").checked) ? 1 : 0;
+    const LEDidle = (document.getElementById("LEDidle2").checked) ? 2
+        : (document.getElementById("LEDidle1").checked) ? 1 : 0;
     let rebootHours = Math.max(Math.min(parseInt(document.getElementById("rebootHours").value), 72), 0);
     if (isNaN(rebootHours)) rebootHours = 0;
     let newDeviceName = document.getElementById("newDeviceName").value.substring(0, 30).trim();
@@ -809,6 +817,8 @@ async function saveSettings() {
     const syslogEn = (document.getElementById("syslogEn").checked) ? '1' : '0';
     let syslogIP = document.getElementById("syslogIP").value.substring(0, 15);
     if (syslogIP.length == 0) syslogIP = serverStatus.syslogIP;
+    let syslogPort = document.getElementById("syslogPort").value.substring(0, 5);
+    if (syslogPort.length == 0 || Number(syslogPort) == 0) syslogPort = 514;
 
     const staticIP = (document.getElementById("staticIP").checked) ? '1' : '0';
     let localIP = document.getElementById("IPaddress").value.substring(0, 15);
@@ -848,7 +858,8 @@ async function saveSettings() {
         "enableNTP", enableNTP,
         "timeZone", timeZone,
         "syslogEn", syslogEn,
-        "syslogIP", syslogIP
+        "syslogIP", syslogIP,
+        "syslogPort", syslogPort
     );
     if (reboot) {
         countdown(rebootSeconds, "Settings saved, RATGDO device rebooting...&nbsp;");
