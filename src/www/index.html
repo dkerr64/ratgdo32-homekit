@@ -170,6 +170,10 @@
                   <input type="button" value="Save User/Password" onclick="changePassword()">
                 </td>
               </tr>
+              <tr>
+                <td></td>
+                <td id="matchMsg" style="font-size: 0.6em;"><br></td>
+              </tr>
             </table>
           </div>
         </div>
@@ -203,10 +207,14 @@
                 </td>
               </tr>
               <tr>
-                <td class="label">LED on when idle:</td>
+                <td class="label">LED activity:</td>
                 <td>&nbsp;
-                  <input type="checkbox" id="LEDidle" name="LEDidle" value="yes">
-                  <span style="font-size: 0.8em;">LED will flash on activity</span>
+                  <input type="radio" id="LEDidle0" name="LEDidle" value="0">
+                  <label for="LEDidle0">Idle on</label>
+                  <input type="radio" id="LEDidle1" name="LEDidle" value="1">
+                  <label for="LEDidle1">Flash on</label>
+                  <input type="radio" id="LEDidle2" name="LEDidle" value="2">
+                  <label for="LEDidle2">Disable</label>
                 </td>
               </tr>
               <tr>
@@ -221,10 +229,12 @@
                 <td>
                   <table class="settings" id="syslogTable" style="display: none;">
                     <tr>
-                      <td class="IPlabel">Syslog Server:</td>
+                      <td class="IPlabel">Server IP/Port:</td>
                       <td>&nbsp;
                         <input class="syslogIPinput IPinput" id="syslogIP" type="text" placeholder="0.0.0.0"
-                          minlength="7" maxlength="15" size="15">
+                          minlength="7" maxlength="15" size="15">&nbsp;:
+                        <input class="syslogIPinput IPinput" id="syslogPort" type="text" placeholder="514" minlength="1"
+                          maxlength="5" size="5">
                       </td>
                     </tr>
                   </table>

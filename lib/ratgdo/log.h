@@ -1,23 +1,38 @@
-// Copyright 2023 Brandon Matthews <thenewwazoo@optimaltour.us>
-// All rights reserved. GPLv3 License
+/****************************************************************************
+ * RATGDO HomeKit for ESP32
+ * https://ratcloud.llc
+ * https://github.com/PaulWieland/ratgdo
+ *
+ * Copyright (c) 2023-24 David A Kerr... https://github.com/dkerr64/
+ * All Rights Reserved.
+ * Licensed under terms of the GPL-3.0 License.
+ *
+ * Contributions acknowledged from
+ * Brandon Matthews... https://github.com/thenewwazoo
+ * Jonathan Stroud...  https://github.com/jgstroud
+ *
+ */
+#pragma once
 
-#ifndef _LOG_H
-#define _LOG_H
+// C/C++ language includes
 
+// Arduino includes
 #include <Arduino.h>
 #include <LittleFS.h>
-#include "secplus2.h"
-#include <esp_xpgm.h>
 
-void print_packet(uint8_t pkt[SECPLUS2_CODE_LEN]);
+// RATGDO project includes
+#include "HomeSpan.h"
+
+void print_packet(uint8_t *pkt);
 
 // #define LOG_MSG_BUFFER
 
 #ifdef LOG_MSG_BUFFER
 
-#define CRASH_LOG_MSG_FILE "crash_log"
-#define REBOOT_LOG_MSG_FILE "reboot_log"
-#if defined(MMU_IRAM_HEAP)
+#define CRASH_LOG_MSG_FILE "/crash_log"
+#define REBOOT_LOG_MSG_FILE "/reboot_log"
+
+#if defined(MMU_IRAM_HEAP) || !defined(ESP8266)
 // This can be large, but not too large.  IRAM heap is approx 18KB, we also need
 // space for other data in here, so during development monitor logs and adjust
 // this smaller if necessary.  IRAM malloc's are all done during startup.
@@ -25,6 +40,15 @@ void print_packet(uint8_t pkt[SECPLUS2_CODE_LEN]);
 #else
 #define LOG_BUFFER_SIZE 1024
 #endif
+#define LINE_BUFFER_SIZE 256
+
+#ifdef ENABLE_CRASH_LOG
+void crashCallback();
+#endif
+
+extern bool syslogEn;
+extern uint16_t syslogPort;
+extern char syslogIP[16];
 
 typedef struct logBuffer
 {
@@ -33,31 +57,48 @@ typedef struct logBuffer
     char buffer[LOG_BUFFER_SIZE - 4]; // sized so whole struct is LOG_BUFFER_SIZE bytes
 } logBuffer;
 
-extern "C" void logToBuffer_P(const char *fmt, ...);
-void printSavedLog(File file, Print &outDevice = Serial);
-void printSavedLog(Print &outDevice = Serial);
-void printMessageLog(Print &outDevice = Serial);
-void crashCallback();
+class LOG
+{
+private:
+    char *lineBuffer = NULL;     // Buffer for single message line
+    SemaphoreHandle_t logMutex = NULL;
+    bool syslogEn = false;
 
-#define RATGDO_PRINTF(message, ...) logToBuffer_P(PSTR(message), ##__VA_ARGS__)
+    static LOG *instancePtr;
+    LOG();
 
-#define RINFO(message, ...) RATGDO_PRINTF(">>> [%7lu] RATGDO: " message "\r\n", millis(), ##__VA_ARGS__)
-#define RERROR(message, ...) RATGDO_PRINTF("!!! [%7lu] RATGDO: " message "\r\n", millis(), ##__VA_ARGS__)
+public:
+    logBuffer *msgBuffer = NULL; // Buffer to save log messages as they occur
+    File logMessageFile;
+
+    LOG(const LOG &obj) = delete;
+    static LOG *getInstance() { return instancePtr; }
+
+    void logToBuffer(const char *fmt, ...);
+    void printSavedLog(File file, Print &outDevice = Serial);
+    void printSavedLog(Print &outDevice = Serial);
+    void printMessageLog(Print &outDevice = Serial);
+};
+
+extern LOG *ratgdoLogger;
+
+#define RATGDO_PRINTF(message, ...) ratgdoLogger->logToBuffer(PSTR(message), ##__VA_ARGS__)
+
+#define RINFO(tag, message, ...) RATGDO_PRINTF(">>> [%7lu] %s: " message "\n", millis(), tag, ##__VA_ARGS__)
+#define RERROR(tag, message, ...) RATGDO_PRINTF("!!! [%7lu] %s: " message "\n", millis(), tag, ##__VA_ARGS__)
 #else // LOG_MSG_BUFFER
 
 #ifndef UNIT_TEST
 
-#define RINFO(message, ...) XPGM_PRINTF(">>> [%7lu] RATGDO: " message "\r\n", millis(), ##__VA_ARGS__)
-#define RERROR(message, ...) XPGM_PRINTF("!!! [%7lu] RATGDO: " message "\r\n", millis(), ##__VA_ARGS__)
+#define RINFO(tag, message, ...) LOG0(">>> [%7lu] %s: " message "\n", millis(), tag, ##__VA_ARGS__)
+#define RERROR(tag, message, ...) LOG0("!!! [%7lu] %s: " message "\n", millis(), tag, ##__VA_ARGS__)
 
 #else // UNIT_TEST
 
 #include <stdio.h>
-#define RINFO(message, ...) printf(">>> RATGDO: " message "\n", ##__VA_ARGS__)
-#define RERROR(message, ...) printf("!!! RATGDO: " message "\n", ##__VA_ARGS__)
+#define RINFO(tag, message, ...) printf(">>> %s: " message "\n", tag, ##__VA_ARGS__)
+#define RERROR(tag, message, ...) printf("!!! %s: " message "\n", tag, ##__VA_ARGS__)
 
 #endif // UNIT_TEST
 
 #endif // LOG_MSG_BUFFER
-
-#endif // _LOG_H
