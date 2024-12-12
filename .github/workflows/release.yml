@@ -32,31 +32,43 @@ jobs:
           property: version
           value: ${{ steps.tag.outputs.latestTag }}
           value_type: string
-          
-      - name: Output created (or overwritten) manifest.json
-        run: cat docs/manifest.json
-        shell: bash
-        
-      - name: Output read value of 'version' property
-        run: echo ${{ steps.write_version.outputs.value }}
-        shell: bash
 
-      - name: Update firmware/*.bin version on manifest.json
+      - name: Update firmware/*.bootloader.bin version on manifest.json
         uses: amochkin/action-json@v1
-        id: builds_parts_path
+        id: builds_parts_path_0
         with:
           mode: write
           file: docs/manifest.json
           property: builds.0.parts.0.path
-          value: firmware/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bin
+          value: firmware/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          value_type: string
+
+      - name: Update firmware/*.partitions.bin version on manifest.json
+        uses: amochkin/action-json@v1
+        id: builds_parts_path_1
+        with:
+          mode: write
+          file: docs/manifest.json
+          property: builds.0.parts.1.path
+          value: firmware/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          value_type: string
+
+      - name: Update firmware/*.bin version on manifest.json
+        uses: amochkin/action-json@v1
+        id: builds_parts_path_3
+        with:
+          mode: write
+          file: docs/manifest.json
+          property: builds.0.parts.3.path
+          value: firmware/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.firmware.bin
           value_type: string
           
       - name: Output created (or overwritten) manifest.json
         run: cat docs/manifest.json
         shell: bash
         
-      - name: Output read value of 'version' property
-        run: echo ${{ steps.builds_parts_path.outputs.value }}
+      - name: Output read value of 'version' & `parts` property
+        run: echo ${{ steps.write_version.outputs.value }} ${{ steps.builds_parts_path_0.outputs.value }} ${{ steps.builds_parts_path_1.outputs.value }} ${{ steps.builds_parts_path_3.outputs.value }}
         shell: bash
 
       - name: Attach manifest.json
@@ -98,39 +110,99 @@ jobs:
 
       - name: Rename Firmware Files
         run: |
-          mv .pio/build/ratgdo_esp32dev/firmware.bin .pio/build/ratgdo_esp32dev/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bin
+          mv .pio/build/ratgdo_esp32dev/firmware.bin .pio/build/ratgdo_esp32dev/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.firmware.bin
+          mv .pio/build/ratgdo_esp32dev/bootloader.bin .pio/build/ratgdo_esp32dev/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          mv .pio/build/ratgdo_esp32dev/partitions.bin .pio/build/ratgdo_esp32dev/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.partitions.bin
           mv .pio/build/ratgdo_esp32dev/firmware.elf .pio/build/ratgdo_esp32dev/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.elf
           mv .pio/build/ratgdo_esp32dev/firmware.md5 .pio/build/ratgdo_esp32dev/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.md5
 
-      - name: Attach Bundle - Firmware.bin
+      - name: Attach Bundle - firmware.bin
         uses: AButler/upload-release-assets@v3.0
         with:
-          files: ".pio/build/ratgdo_esp32dev/*.bin"
+          files: ".pio/build/ratgdo_esp32dev/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.firmware.bin"
           repo-token: ${{ secrets.GITHUB_TOKEN }}
           release-tag: ${{ steps.tag.outputs.latestTag }}
       
-      - name: Upload Release Asset - Firmware.bin
+      - name: Upload Release Asset - firmware.bin
         uses: wow-actions/download-upload@v1
         with:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          url: https://github.com/ratgdo/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bin
+          url: https://github.com/ratgdo/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.firmware.bin
           dir: docs/firmware/
-          commit_message: "Upload Latest Firmware: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bin"
+          commit_message: "Upload Latest Firmware: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.firmware.bin"
     
-      - name: Upload Firmware.bin
+      - name: Upload firmware.bin
         uses: actions/upload-artifact@v4
         with:
-          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bin
+          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.firmware.bin
           path: |
-            .pio/build/ratgdo_esp32dev/*.bin
+            .pio/build/ratgdo_esp32dev/*.firmware.bin
 
-      - name: Download Firmware.bin
+      - name: Download firmware.bin
         uses: actions/download-artifact@v4
         with:
-          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bin
+          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.firmware.bin
           path: |
             docs/firmware/
 
+      - name: Attach Bundle - bootloader.bin
+        uses: AButler/upload-release-assets@v3.0
+        with:
+          files: ".pio/build/ratgdo_esp32dev/*.bootloader.bin"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          release-tag: ${{ steps.tag.outputs.latestTag }}
+        
+      - name: Upload Release Asset - bootloader.bin
+        uses: wow-actions/download-upload@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          url: https://github.com/ratgdo/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          dir: docs/firmware/
+          commit_message: "Upload Latest bootloader: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bootloader.bin"
+    
+      - name: Upload bootloader.bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          path: |
+            .pio/build/ratgdo_esp32dev/*.bootloader.bin
+
+      - name: Download bootloader.bin
+        uses: actions/download-artifact@v4
+        with:
+          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.bootloader.bin
+          path: |
+            docs/firmware/
+
+      - name: Attach Bundle - partitions.bin
+        uses: AButler/upload-release-assets@v3.0
+        with:
+          files: ".pio/build/ratgdo_esp32dev/*.partitions.bin"
+          repo-token: ${{ secrets.GITHUB_TOKEN }}
+          release-tag: ${{ steps.tag.outputs.latestTag }}
+      
+      - name: Upload Release Asset - partitions.bin
+        uses: wow-actions/download-upload@v1
+        with:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          url: https://github.com/ratgdo/homekit-ratgdo32/releases/download/${{ steps.tag.outputs.latestTag }}/homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          dir: docs/firmware/
+          commit_message: "Upload Latest partitions: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.partitions.bin"
+    
+      - name: Upload partitions.bin
+        uses: actions/upload-artifact@v4
+        with:
+          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          path: |
+            .pio/build/ratgdo_esp32dev/*.partitions.bin
+
+      - name: Download partitions.bin
+        uses: actions/download-artifact@v4
+        with:
+          name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.partitions.bin
+          path: |
+            docs/firmware/
+            
       - name: Attach Bundle - Firmware.md5
         uses: AButler/upload-release-assets@v3.0
         with:
@@ -146,7 +218,7 @@ jobs:
           dir: docs/firmware/
           commit_message: "Upload Latest md5: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.md5"
     
-      - name: Upload Firmware.bin
+      - name: Upload Firmware.md5
         uses: actions/upload-artifact@v4
         with:
           name: homekit-ratgdo32-${{ steps.tag.outputs.latestTag }}.md5
@@ -201,7 +273,7 @@ jobs:
           color: "5723991"
           username: "ratgdo"
           avatar_url: "https://avatars.githubusercontent.com/u/144837877?s=200&v=4"
-          footer_title: "homekit-ratgdo"
+          footer_title: "homekit-ratgdo32"
           footer_icon_url: "https://avatars.githubusercontent.com/u/144837877?s=200&v=4"
           footer_timestamp: true
           
@@ -213,6 +285,6 @@ jobs:
           color: "5723991"
           username: "ratgdo"
           avatar_url: "https://avatars.githubusercontent.com/u/144837877?s=200&v=4"
-          footer_title: "Pre-Release: homekit-ratgdo"
+          footer_title: "Pre-Release: homekit-ratgdo32"
           footer_icon_url: "https://avatars.githubusercontent.com/u/144837877?s=200&v=4"
           footer_timestamp: true  
