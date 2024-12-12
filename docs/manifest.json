@@ -1,6 +1,6 @@
 {
   "name": "homekit-ratgdo",
-  "version": "v3.0.0",
+  "version": "v3.0.1",
   "new_install_prompt_erase": true,
   "new_install_improv_wait_time": 60,
   "builds": [
@@ -8,7 +8,7 @@
       "chipFamily": "ESP32",
       "parts": [
         {
-          "path": "firmware/homekit-ratgdo32-v3.0.0.bin",
+          "path": "firmware/homekit-ratgdo32-v3.0.1.bin",
           "offset": 0
         }
       ]
